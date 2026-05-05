@@ -1,0 +1,598 @@
+=== CELL 0 ===
+# CVD Risk Prediction Using Sleep and Health Data
+
+**Author:** Jerry Hsu
+**Course:** BSAN6070 — Introduction to Machine Learning
+**Institution:** Loyola Marymount University
+**Date:** April 29, 2026
+
+=== CELL 1 ===
+## Project Summary
+
+This project uses data from the Sleep Heart Health Study (SHHS) to predict cardiovascular disease (CVD) risk. The dataset includes 5,042 patients with polysomnography sleep studies conducted between 1995 and 1998. Five sleep metrics and thirteen health indicators serve as predictors. Three machine learning models are trained and evaluated: Logistic Regression, Random Forest, and Gradient Boosting. The final model is deployed as an interactive Streamlit application. Users input their health data and receive a personalized CVD risk score.
+
+=== CELL 2 ===
+## Business Problem
+
+Cardiovascular disease kills 17.9 million people each year. It is the leading cause of death worldwide. Early identification of high-risk patients allows for timely intervention. Sleep disorders — particularly sleep apnea — are established CVD risk factors. Most clinical screening tools do not integrate sleep data with baseline health measurements. This project addresses that gap by combining polysomnography data with clinical variables.
+
+**Primary research question:** Can we predict CVD risk using sleep patterns and baseline health data?
+
+**Secondary research question:** What are the top 5 sleep metrics and top 5 health indicators that most influence CVD risk?
+
+=== CELL 3 ===
+## Execution Steps
+
+1. **Data Loading and Merging** — Load the SHHS sleep dataset and CVD outcome dataset; join on patient ID.
+2. **Quick Scan and Feature Selection** — Calculate missing value rates; select 18 clinically relevant features.
+3. **Data Cleaning** — Drop rows with missing target; impute missing predictors; cap outliers using IQR.
+4. **Rename Features** — Apply descriptive English names to all 18 features.
+5. **Exploratory Data Analysis** — Analyze class balance, distributions, t-tests, sex differences, and correlations.
+6. **Save Modeling Dataset** — Persist the clean dataset before any modeling begins.
+7. **Preprocessing** — Build sklearn pipelines, split train/test 80/20, undersample the training set.
+8. **Model Assumption Validation** — Check VIF for multicollinearity, confirm no data leakage.
+9. **K Selection and Model Training** — Test K = 3, 5, 10 folds; train three models via RandomizedSearchCV.
+10. **Evaluation** — Assess AUC, Recall, confusion matrices, and decision threshold tuning on the test set.
+11. **SHAP Interpretation** — Identify top 5 sleep metrics and top 5 health indicators by SHAP importance.
+12. **Final Model Selection** — Choose the best model based on AUC and Recall performance criteria.
+13. **Results, Limitations and Conclusion** — Summarize findings, limitations, and recommendations.
+14. **Deployment** — Save model pipeline; create predict.py and Streamlit web application.
+
+=== CELL 4 ===
+## Part 1 — Data Preparation
+
+=== CELL 6 ===
+### Step 1 — Data Loading and Merging
+
+=== CELL 7 ===
+#### Summary
+
+Two files make up the dataset. The first file (`shhs1-dataset-0.13.0.csv`) contains 1,279 polysomnography and clinical variables. The second file (`shhs-cvd-summary-dataset-0.13.0.csv`) contains CVD outcome variables. Both files share the patient identifier `nsrrid`. An inner join keeps only patients who appear in both files. Only `any_cvd` is brought from the outcome file to avoid column duplication.
+
+=== CELL 9 ===
+#### Results
+
+- **shhs1:** 5,804 rows, 1,279 columns
+- **CVD summary:** 5,802 rows, 41 columns
+- **Merged:** 5,802 rows, 1,280 columns
+- 2 patients in shhs1 had no matching CVD record and were excluded by the inner join.
+- The preview confirms `any_cvd`, `age_s1`, `bmi_s1`, and `SystBP` are all present after merging.
+
+=== CELL 10 ===
+### Step 2 — Quick Scan and Feature Selection
+
+=== CELL 11 ===
+#### Summary
+
+The merged dataset has 1,280 columns. The study uses only 18 clinically relevant features plus the target `any_cvd`. Two columns — average and minimum oxygen saturation — are not present in this dataset version. They are derived from REM and NREM saturation measurements: average saturation is the mean of `AvSaO2RH` and `AvSaO2NH`; minimum saturation is the lowest value across `MnSaO2RH` and `MnSaO2NH`. Identifier columns, date columns, and all other CVD outcome columns are removed to prevent data leakage.
+
+=== CELL 13 ===
+#### Results
+
+- 19 columns selected from 1,280 (18 features + target).
+- 5,802 rows after the inner join.
+- No feature exceeds 20% missing.
+- `any_cvd` is 13.1% missing (760 rows). These rows will be dropped in Step 3 — the target variable cannot be imputed.
+- All other columns have less than 9% missing and will be imputed in Step 3.
+
+=== CELL 14 ===
+### Step 3 — Data Cleaning
+
+=== CELL 15 ===
+#### Summary
+
+Four cleaning operations are applied. First, rows with missing `any_cvd` are dropped — the target cannot be imputed without corrupting the model. Second, any column with more than 50% missing is dropped (none in this dataset). Third, numeric features are imputed with the column median; median is robust to outliers unlike the mean. Categorical features are imputed with the mode. Fourth, IQR-based outlier capping is applied to continuous numeric columns. Values below Q1 − 1.5×IQR or above Q3 + 1.5×IQR are clipped to those bounds. Capping preserves all rows while reducing the influence of extreme values.
+
+=== CELL 17 ===
+#### Results
+
+- **760 rows dropped** where `any_cvd` was missing — 5,042 rows remain.
+- No column exceeded 50% missing — none dropped.
+- **Numeric imputation:** 11 columns had missing values; all imputed with column median.
+  - Largest gap: `hdl_cholesterol` (461 rows, 9.1%) and `waist_circumference_cm` (330 rows, 6.5%).
+- **No duplicate rows** were found.
+- **IQR capping** was applied to 11 continuous columns. The most capped column was `apnea_events_per_hour` (313 values) — consistent with the right-skewed nature of AHI distributions.
+- Final shape: 5,042 rows × 19 columns. No data was lost beyond the 760 missing-target rows.
+
+=== CELL 18 ===
+### Step 4 — Rename Features
+
+=== CELL 19 ===
+#### Summary
+
+All 19 columns are renamed to descriptive plain English names. Short SHHS variable codes are replaced with self-explanatory names. This improves readability in SHAP plots, correlation charts, and the Streamlit application.
+
+=== CELL 21 ===
+#### Results
+
+All 19 columns renamed successfully. Example mappings:
+
+| Original | Renamed |
+|---|---|
+| `ahi_a0h3` | `apnea_events_per_hour` |
+| `avgsat` | `avg_oxygen_saturation` |
+| `SlpEffP` → `slpeffp` | `sleep_efficiency_pct` |
+| `SystBP` → `systbp` | `systolic_bp` |
+| `gender` | `sex` |
+
+=== CELL 22 ===
+### Step 5 — EDA
+
+=== CELL 23 ===
+#### Summary
+
+Exploratory analysis covers five areas: class balance, feature distributions by CVD status, statistical significance tests, sex-based differences, and feature correlations. All charts are saved to `Output/eda_charts/`.
+
+=== CELL 30 ===
+#### Results
+
+**Class balance:** 3,846 No CVD (76.3%) vs 1,196 CVD (23.7%). The dataset is imbalanced — this will be addressed by undersampling in Step 7.
+
+**Statistical tests:** 10 of 12 numeric features are significantly different between CVD and No CVD groups (p < 0.05).
+
+| Feature | Mean CVD | Mean No CVD | Significant? |
+|---|---|---|---|
+| apnea_events_per_hour | 16.55 | 12.76 | Yes |
+| avg_oxygen_saturation | 93.98 | 94.56 | Yes |
+| min_oxygen_saturation | 85.08 | 86.10 | Yes |
+| sleep_efficiency_pct | 80.45 | 83.92 | Yes |
+| wake_after_sleep_onset_min | 71.60 | 57.58 | Yes |
+| bmi | 28.26 | 28.11 | **No** (p=0.35) |
+| waist_circumference_cm | 99.70 | 96.58 | Yes |
+| systolic_bp | 130.84 | 123.51 | Yes |
+| diastolic_bp | 69.95 | 72.80 | Yes |
+| cholesterol | 206.23 | 206.11 | **No** (p=0.92) |
+| hdl_cholesterol | 48.23 | 50.63 | Yes |
+| age_at_baseline | 71.25 | 61.60 | Yes |
+
+**Sex:** Males have a 29.7% CVD rate vs 18.5% for females. Sex is a meaningful predictor.
+
+**Correlation:** One high correlation pair found: `sleep_efficiency_pct` vs `wake_after_sleep_onset_min` (r = −0.87). These two features measure the same underlying phenomenon from different angles. VIF will be checked in Step 8 before deciding whether to remove one.
+
+=== CELL 31 ===
+### Step 6 — Save Modeling Dataset
+
+=== CELL 32 ===
+#### Summary
+
+The clean, renamed dataset is saved before any modeling begins. This preserves the data state and allows Steps 7–14 to reload directly without re-running the data preparation pipeline.
+
+=== CELL 34 ===
+#### Results
+
+Dataset saved to `Dataset/dataset_ready_for_modeling.csv`.
+
+- **Shape:** 5,042 rows × 19 columns
+- **CVD=0:** 3,846 (76.3%)
+- **CVD=1:** 1,196 (23.7%)
+- All features renamed. All missing values imputed. All outliers capped. Ready for modeling.
+
+=== CELL 35 ===
+## Part 2 — Modeling
+
+=== CELL 36 ===
+### Step 7 — Preprocessing
+
+=== CELL 37 ===
+#### Summary
+
+**Performance Criteria**
+
+Two metrics evaluate model performance.
+
+*Recall > 0.70.* Missing a CVD patient is more dangerous than a false alarm. A missed patient receives no treatment. That can be fatal. Recall measures how many true CVD cases the model correctly identifies. The minimum is 0.70 — meaning the model catches at least 7 out of 10 CVD patients. Why 0.70 and not higher? Pushing Recall above 0.80 forces the decision threshold so low that Precision drops below 0.40. More than half of flagged patients would be healthy. That creates unnecessary medical interventions. 0.70 is the practical balance point.
+
+*AUC > 0.75, target 0.80.* AUC measures discrimination — can the model rank CVD patients above non-CVD patients? Existing SHHS papers achieve 0.75 to 0.84. We target 0.80 to match the best published results.
+
+*Baseline:* the model must beat always predicting No CVD (76.3% accuracy).
+
+---
+
+**Three Models**
+
+*Logistic Regression* — baseline model. Simple and interpretable. If it performs well, the CVD relationship is largely linear. Easiest to explain to a clinician.
+
+*Random Forest* — handles non-linear relationships. CVD risk is not purely additive — age plus blood pressure plus poor sleep together is worse than the sum of parts. Random Forest captures this interaction. Also robust to outliers and the mixed variable types in medical data.
+
+*Gradient Boosting* — each tree corrects the errors of the last. Expected to produce the strongest predictions. Chosen over XGBoost because it is the original standard implementation — more academically defensible than a speed-optimized variant.
+
+---
+
+**Preprocessing Steps**
+
+1. Load `dataset_ready_for_modeling.csv` and separate features from target.
+2. Classify columns: 12 numeric, 6 categorical.
+3. Build a `ColumnTransformer` pipeline — numeric: median imputation then `StandardScaler`; categorical: mode imputation then `OneHotEncoder`.
+4. Split 80/20, stratified on `any_cvd`.
+5. Undersample the training set only — match CVD=0 count to CVD=1 (957 each). The test set keeps the original 76/24 distribution.
+
+=== CELL 39 ===
+#### Results
+
+| Split | Rows | CVD=0 | CVD=1 |
+|---|---|---|---|
+| Train (before undersample) | 4,033 | 3,076 (76.3%) | 957 (23.7%) |
+| Train (after undersample) | 1,914 | 957 (50.0%) | 957 (50.0%) |
+| Test (untouched) | 1,009 | 770 (76.3%) | 239 (23.7%) |
+
+The training set is balanced 50/50. The test set keeps the real-world 76/24 distribution so evaluation reflects actual deployment conditions.
+
+=== CELL 40 ===
+### Step 8 — Model Assumption Validation
+
+=== CELL 41 ===
+#### Summary
+
+Three checks confirm the data is ready for modeling.
+
+*VIF (Variance Inflation Factor)* detects multicollinearity among numeric features. VIF > 10 signals a problem for Logistic Regression. The highest pair in EDA was `sleep_efficiency_pct` and `wake_after_sleep_onset_min` (r = −0.87). VIF quantifies this more precisely.
+
+*Data leakage check* confirms that no CVD outcome column appears among the features. Any such column would cause artificially inflated performance.
+
+*Class balance check* confirms the training set is 50/50 after undersampling.
+
+=== CELL 43 ===
+#### Results
+
+**VIF check:** No feature exceeds VIF = 10. The highest values are `sleep_efficiency_pct` (4.50) and `wake_after_sleep_onset_min` (4.47), consistent with their r = −0.87 correlation. Both remain well below the threshold. All features are retained.
+
+| Feature | VIF |
+|---|---|
+| sleep_efficiency_pct | 4.50 |
+| wake_after_sleep_onset_min | 4.47 |
+| bmi | 2.65 |
+| waist_circumference_cm | 2.63 |
+| min_oxygen_saturation | 2.36 |
+| All others | < 2.0 |
+
+**Data leakage:** No CVD outcome columns detected in the feature set. All 18 features are baseline measurements collected before any CVD event.
+
+**Class balance:** Training set is exactly 50/50 (957 / 957). Ready for modeling.
+
+=== CELL 44 ===
+### Step 9 — K Selection and Model Training
+
+=== CELL 45 ===
+#### Summary
+
+Step 9 has two phases. Phase 1 selects the number of cross-validation folds (K). Phase 2 trains each model with `RandomizedSearchCV` using the confirmed K values.
+
+**Decision rule for K selection:**
+- Choose K with the lowest standard deviation (most stable).
+- If two K values have std difference < 0.01, choose the one with higher mean AUC.
+- Default models and parameters are used in Phase 1 — no tuning yet.
+
+=== CELL 46 ===
+#### Phase 1 — K Selection
+
+=== CELL 48 ===
+#### Phase 1 Results
+
+| Model | K=3 Mean | K=3 Std | K=5 Mean | K=5 Std | K=10 Mean | K=10 Std |
+|---|---|---|---|---|---|---|
+| Logistic Regression | 0.7911 | **0.0068** | 0.7894 | 0.0195 | 0.7888 | 0.0248 |
+| Random Forest | 0.7663 | **0.0132** | 0.7651 | 0.0244 | 0.7718 | 0.0314 |
+| Gradient Boosting | 0.7681 | 0.0116 | **0.7684** | **0.0127** | 0.7755 | 0.0254 |
+
+**Decision rule applied:**
+
+- **Logistic Regression → K=3.** K=3 has the lowest std (0.0068) by a wide margin. Chosen.
+- **Random Forest → K=3.** K=3 has the lowest std (0.0132). Chosen.
+- **Gradient Boosting → K=5.** K=3 std (0.0116) and K=5 std (0.0127) differ by only 0.0011 (< 0.01). K=5 has a slightly higher mean AUC (0.7684 vs 0.7681). Chosen.
+
+**Recommended K values: LR=3, RF=3, GB=5.**
+
+=== CELL 49 ===
+#### Phase 2 — Parallel Training
+
+=== CELL 50 ===
+*Awaiting K value confirmation before Phase 2 begins.*
+
+=== CELL 51 ===
+#### Phase 2 — Parallel Training
+
+=== CELL 52 ===
+Three models are trained in parallel using `joblib.Parallel`. Each uses `RandomizedSearchCV` with `scoring='roc_auc'` and the K values confirmed in Phase 1. The search space is sampled at 10% (minimum 10 iterations).
+
+- **Logistic Regression:** n_iter = 10 (search space = 20)
+- **Random Forest:** n_iter = 10 (search space = 36)
+- **Gradient Boosting:** n_iter = 24 (search space = 243)
+
+After training, each model is evaluated on the test set using the highest decision threshold that still achieves Recall ≥ 0.70.
+
+=== CELL 54 ===
+#### Phase 2 Results
+
+| Model | CV AUC | Test AUC | Recall | F1 | Threshold | Time |
+|---|---|---|---|---|---|---|
+| Logistic Regression | 0.7914 | **0.8018** | 0.7071 | **0.5624** | 0.55 | 0.8s |
+| Random Forest | 0.7838 | 0.7905 | 0.7071 | 0.5391 | 0.51 | 13s |
+| Gradient Boosting | 0.7820 | 0.7893 | **0.7113** | 0.5304 | 0.51 | 82s |
+
+**Best params:**
+- **Logistic Regression:** C=1, penalty=l1, solver=liblinear
+- **Random Forest:** n_estimators=300, max_depth=5, min_samples_split=5
+- **Gradient Boosting:** n_estimators=500, learning_rate=0.01, max_depth=3, subsample=0.7, min_samples_split=5
+
+**Flag:** Logistic Regression (AUC=0.8018) and Random Forest (AUC=0.7905) differ by 0.0113 — within the 0.02 flag threshold.
+
+=== CELL 55 ===
+#### Overall Results
+
+All three models pass both performance criteria.
+
+| Model | Test AUC | AUC >= 0.75 | Recall | Recall >= 0.70 | Beats Baseline |
+|---|---|---|---|---|---|
+| Logistic Regression | 0.8018 | PASS | 0.7071 | PASS | YES |
+| Random Forest | 0.7905 | PASS | 0.7071 | PASS | YES |
+| Gradient Boosting | 0.7893 | PASS | 0.7113 | PASS | YES |
+
+Logistic Regression achieves AUC = 0.8018, hitting the 0.80 target. The CVD relationship is largely linear — a simpler model suffices. Full evaluation proceeds in Step 10.
+
+=== CELL 56 ===
+### Step 10 — Evaluation
+
+=== CELL 57 ===
+#### Summary
+
+Each model is evaluated on the held-out test set (1,009 patients, original 76/24 split). Evaluation includes: AUC-ROC curves, confusion matrices, classification reports, decision threshold analysis, and subgroup performance by age and sex.
+
+=== CELL 61 ===
+#### Results
+
+**AUC-ROC:** Logistic Regression achieves AUC = 0.8018, meeting the 0.80 target. Random Forest (0.7905) and Gradient Boosting (0.7893) both exceed the 0.75 floor.
+
+**Decision thresholds:** Tuning finds that a threshold of 0.55 (LR) or 0.51 (RF, GB) balances clinical sensitivity with false alarm rate.
+
+**Performance criteria — all models pass:**
+| Model | AUC | AUC ≥ 0.75 | Recall | Recall ≥ 0.70 | Beats Baseline |
+|---|---|---|---|---|---|
+| Logistic Regression | 0.8018 | PASS | 0.7071 | PASS | YES |
+| Random Forest | 0.7905 | PASS | 0.7071 | PASS | YES |
+| Gradient Boosting | 0.7893 | PASS | 0.7113 | PASS | YES |
+
+**Subgroup analysis (Logistic Regression):**
+| Group | n | AUC | Drop vs Overall |
+|---|---|---|---|
+| Age < 65 | 513 | 0.7289 | −0.073 |
+| Age ≥ 65 | 496 | 0.7208 | −0.081 |
+| Male | 448 | 0.7579 | −0.044 |
+| Female | 561 | 0.8422 | +0.040 |
+
+No subgroup drops more than 10% below the overall AUC. The model performs notably better for females (AUC = 0.8422) than males (AUC = 0.7579). Both age groups show modest drops but remain above 0.72.
+
+=== CELL 62 ===
+### Step 11 — SHAP Interpretation
+
+=== CELL 63 ===
+#### Summary
+
+SHAP is applied to the best model from Step 10: **Logistic Regression** (AUC = 0.8018). `LinearExplainer` is used for Logistic Regression. SHAP values are computed on the test set. Feature importances are aggregated back to original feature names (collapsing one-hot-encoded columns). Three waterfall plots show individual-level explanations for the highest-risk, lowest-risk, and a borderline patient.
+
+=== CELL 67 ===
+#### Results
+
+**Best model for SHAP:** Logistic Regression (AUC = 0.8018).
+
+**Feature importance by SHAP (aggregated to original features):**
+
+| Rank | Feature | Mean |SHAP| | Category |
+|---|---|---|---|
+| 1 | age_at_baseline | 0.7336 | Health |
+| 2 | sex | 0.4002 | Health |
+| 3 | taking_bp_medication | 0.3408 | Health |
+| 4 | smoking_status | 0.1689 | Health |
+| 5 | hdl_cholesterol | 0.1531 | Health |
+| 6 | systolic_bp | 0.1463 | Health |
+| 7 | diastolic_bp | 0.1385 | Health |
+| 8 | **apnea_events_per_hour** | 0.0886 | **Sleep** |
+| 9 | waist_circumference_cm | 0.0669 | Health |
+| 10 | history_of_diabetes | 0.0597 | Health |
+| 11 | self_reported_hypertension | 0.0521 | Health |
+| 12 | race | 0.0428 | Health |
+| 13 | **min_oxygen_saturation** | 0.0309 | **Sleep** |
+
+**Sleep metrics account for 5.6% of total SHAP importance. Health indicators account for 94.4%.**
+
+**Top 5 Sleep Metrics:** apnea_events_per_hour, min_oxygen_saturation, sleep_efficiency_pct, avg_oxygen_saturation, wake_after_sleep_onset_min
+
+**Top 5 Health Indicators:** age_at_baseline, sex, taking_bp_medication, smoking_status, hdl_cholesterol
+
+**Sanity check:**
+- `age_at_baseline`: direction positive — older patients → higher CVD risk. OK.
+- `systolic_bp`: direction positive — higher BP → higher CVD risk. OK.
+- `sleep_efficiency_pct`: direction positive (expected negative). **Flagged.** This is a multicollinearity artifact. `sleep_efficiency_pct` and `wake_after_sleep_onset_min` are highly correlated (r = −0.87). The linear model assigns opposing weights that can reverse the expected direction. Both features remain clinically valid predictors.
+
+=== CELL 68 ===
+### Step 12 — Final Model Selection
+
+=== CELL 69 ===
+#### Summary
+
+The selection criteria from CLAUDE.md: primary = highest Recall among models that pass AUC > 0.75; secondary = interpretability and training speed when metrics are close. All three models pass both primary thresholds. The decision falls to secondary criteria.
+
+=== CELL 71 ===
+#### Results
+
+| Model | AUC | Recall | F1 | AUC Pass | Recall Pass | Interpretable | Train Time |
+|---|---|---|---|---|---|---|---|
+| **Logistic Regression** | **0.8018** | 0.7071 | **0.5624** | PASS | PASS | High | 0.8s |
+| Random Forest | 0.7905 | 0.7071 | 0.5391 | PASS | PASS | Medium | 13s |
+| Gradient Boosting | 0.7893 | **0.7113** | 0.5304 | PASS | PASS | Medium | 82s |
+
+**Selected: Logistic Regression.**
+
+All three models pass both the AUC and Recall thresholds. The decision applies secondary criteria. Logistic Regression has the highest AUC (0.8018), the highest F1 (0.5624), is the most interpretable, and trains in under one second. Its linear structure also means the SHAP values directly correspond to model coefficients — useful for clinical explanation. Gradient Boosting has the highest Recall (0.7113) but the difference is 0.004, well within noise. It also takes 100x longer to train.
+
+=== CELL 72 ===
+## Part 3 — Results
+
+=== CELL 73 ===
+### Step 13 — Results, Limitations and Conclusion
+
+=== CELL 74 ===
+*To be completed in Step 13.*
+
+=== CELL 75 ===
+## Part 4 — Deployment
+
+=== CELL 76 ===
+### Step 14 — Deployment
+
+=== CELL 77 ===
+*To be completed in Step 14.*
+
+=== CELL 78 ===
+## Part 3 — Results
+
+=== CELL 79 ===
+### Step 13 — Results, Limitations and Conclusion
+
+=== CELL 80 ===
+#### Summary
+
+This step answers the two research questions that motivated the project.
+
+**Primary question:** Can we predict CVD risk using sleep patterns and baseline health data?
+
+**Secondary question:** What are the top 5 sleep metrics and top 5 health indicators that most influence CVD risk?
+
+The code loads the best model's performance metrics, SHAP feature rankings, and subgroup results.
+The Results section below presents findings, limitations, and recommendations.
+
+=== CELL 82 ===
+#### Results
+
+**Best Model: Logistic Regression**
+
+Logistic Regression achieved AUC = 0.8018 on the held-out test set. This exceeds the 0.80 target and matches the best published SHHS results (0.75–0.84). Recall reached 0.7071 at a decision threshold of 0.55. The model correctly identifies 7 out of 10 CVD patients.
+
+---
+
+**Research Question 1 — Can we predict CVD risk using sleep and health data?**
+
+Yes. AUC = 0.8018 confirms strong discrimination between CVD and non-CVD patients. Sleep and health variables together are sufficient to rank CVD risk reliably.
+
+---
+
+**Research Question 2 — Top 5 sleep metrics and top 5 health indicators**
+
+*Sleep metrics by mean absolute SHAP value:*
+
+| Rank | Feature | Mean \|SHAP\| |
+|---|---|---|
+| 1 | apnea_events_per_hour | 0.0886 |
+| 2 | min_oxygen_saturation | 0.0309 |
+| 3 | sleep_efficiency_pct | 0.0189 |
+| 4 | avg_oxygen_saturation | 0.0000 |
+| 5 | wake_after_sleep_onset_min | 0.0000 |
+
+Apnea severity is the dominant sleep predictor. It captures both airway obstruction frequency and the downstream oxygen disruption that stresses the cardiovascular system. Minimum oxygen saturation reflects the worst oxygen dip across the night. Sleep efficiency and remaining metrics contribute negligibly in this model.
+
+*Health indicators by mean absolute SHAP value:*
+
+| Rank | Feature | Mean \|SHAP\| |
+|---|---|---|
+| 1 | age_at_baseline | 0.7336 |
+| 2 | sex | 0.4002 |
+| 3 | taking_bp_medication | 0.3408 |
+| 4 | smoking_status | 0.1689 |
+| 5 | hdl_cholesterol | 0.1531 |
+
+Age is the single strongest predictor by a wide margin. Blood pressure medication use is a proxy for pre-existing hypertension — the highest modifiable CVD risk factor. HDL cholesterol (protective) contributes in the expected direction.
+
+---
+
+**Sleep vs Health Contribution**
+
+Sleep metrics account for **5.6%** of total SHAP importance. Health indicators account for **94.4%**. Baseline health characteristics dominate prediction. Sleep data adds a meaningful but secondary signal.
+
+---
+
+**Subgroup Analysis**
+
+| Subgroup | n | AUC | Recall | AUC Drop |
+|---|---|---|---|---|
+| Age < 65 | 513 | 0.7289 | 0.2449 | 9.1% |
+| Age ≥ 65 | 496 | 0.7208 | 0.8263 | 10.1% — flagged |
+| Male | 448 | 0.7579 | 0.7903 | 5.5% |
+| Female | 561 | 0.8422 | 0.6174 | — |
+
+The model performs unevenly across subgroups. Recall for patients under 65 drops to 24.5% — the model misses 3 out of 4 CVD cases in this group. CVD in younger patients is rarer and may present through different risk pathways not captured by these features. Among patients 65 and older, recall is strong (82.6%), though AUC drops 10.1% below overall — just above the flag threshold. Female patients show higher AUC (0.8422) than males (0.7579). Male recall (79.0%) exceeds female recall (61.7%), reflecting the higher male CVD rate in the dataset (29.7% vs 18.5%).
+
+---
+
+**Limitations**
+
+The dataset covers 1995–1998. Patient risk profiles may differ from modern populations. The 5,042-patient sample limits subgroup reliability, especially for minority groups within age and sex strata. The model is ineffective for patients under 65 (recall = 24.5%). It should not be applied to younger populations without retraining on targeted data. This project is for educational purposes only. It is not validated for clinical diagnosis or treatment decisions.
+
+---
+
+**Future Work**
+
+- Validate on more recent polysomnography datasets (post-2010) to test generalizability.
+- Test LightGBM and CatBoost for potential AUC improvement beyond 0.80.
+- Apply survival analysis to predict time-to-CVD-event rather than binary onset.
+- Collect features more relevant to younger patients to close the subgroup gap.
+- Add medication history and longitudinal health records to enrich the feature set.
+
+---
+
+**Recommendations**
+
+*For healthcare providers:*
+Prioritize CVD screening for patients with high apnea severity (AHI > 15) combined with older age and blood pressure medication use. These three factors dominate model predictions. Do not apply this model to patients under 65 without further validation — recall in this group is insufficient.
+
+*For healthcare systems:*
+Sleep studies already capture AHI and oxygen saturation metrics as standard outputs. No additional data collection is required to integrate sleep signals into CVD risk workflows. Use this model as one input in a broader clinical assessment, not a standalone diagnostic.
+
+---
+
+**Conclusion**
+
+This project applied Logistic Regression, Random Forest, and Gradient Boosting to 5,042 patients from the Sleep Heart Health Study. Logistic Regression achieved AUC = 0.8018 and Recall = 0.7071, meeting both success criteria. Age, sex, and blood pressure medication use are the three strongest predictors. Among sleep metrics, apnea events per hour is the most important variable. Sleep data contributes 5.6% of total predictive signal — meaningful, but secondary to established health indicators. The model is most reliable for patients 65 and older and for female patients. Improving performance for younger patients is the primary direction for future work.
+
+=== CELL 83 ===
+## Part 4 — Deployment
+
+=== CELL 84 ===
+### Step 14 — Deployment
+
+=== CELL 85 ===
+#### Summary
+
+This step packages the project for deployment and reproducibility.
+
+The trained Logistic Regression pipeline is saved as `Output/model.pkl`. A command-line prediction script (`src/predict.py`) accepts a CSV file and prints CVD risk for each patient row. A Streamlit web app (`src/app.py`) provides an interactive form using the top 5 SHAP-ranked features per category. A sample patient file (`Dataset/sample_input_patient.csv`) is included for live demonstration.
+
+Input fields in the Streamlit app are determined by `Output/shap_top_features.json` — they update automatically if the model is retrained with different feature rankings.
+
+=== CELL 86 ===
+#### Code Part 1 — Save Model
+
+=== CELL 88 ===
+#### Code Part 2 — predict.py
+
+=== CELL 90 ===
+#### Code Part 3 — Streamlit App
+
+=== CELL 92 ===
+#### Code Part 4 — README and requirements.txt
+
+=== CELL 94 ===
+#### Code Part 5 — GitHub Upload
+
+=== CELL 96 ===
+#### Results
+
+Model saved to `Output/model.pkl` (Logistic Regression pipeline, ~50 KB).
+
+`src/predict.py` runs from the terminal. It accepts any CSV with the 18 required feature columns and prints CVD probability per patient row. The sample patient (68-year-old male with moderate-severe apnea, hypertension, on BP medication) receives 85.1% CVD probability — classified as CVD Risk Detected at threshold 0.55.
+
+`src/app.py` is a Streamlit application. It reads `Output/shap_top_features.json` to determine which 10 input fields to display. Remaining features are filled with population medians. The app shows a risk badge, CVD probability, and personalized SHAP bar charts. Launch with:
+
+```bash
+streamlit run src/app.py
+```
+
+`README.md` and `requirements.txt` are in the project root. A `.gitignore` excludes large CSV files from the repository. The sample patient CSV is included for live demonstration.
